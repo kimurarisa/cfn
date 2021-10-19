@@ -1,0 +1,120 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: EC2 and EC2Role Create
+# ------------------------------------------------------------#
+# Input Parameters
+# ------------------------------------------------------------# 
+Parameters:
+  RoleName:
+    Description: "Input SSM role name."
+    Type: String
+    Default: "EC2RoleforSSM"
+  PJPrefix:
+    Type: String
+    Default: test
+  Env:
+    Type: String
+    AllowedValues:
+      - dev
+      - prd
+    Default: dev
+  InstanceType:
+    Description: Enter InstanceType (t3.micro is Test Only)
+    Type: String
+    Default: t3.micro
+  StorageRoot:
+    Description: Enter 30 ~ 1000
+    Type: Number
+    MinValue: 8
+    MaxValue: 1000
+    Default: 30
+  # 以下コマンドでAMIを特定  
+  # aws ec2 describe-images --owners 309956199498 --query 'sort_by(Images, &CreationDate)[*].[CreationDate,Name,ImageId]' --filters "Name=name,Values=RHEL-8.4*" --region ap-northeast-1 --output text
+  AMIID:
+    Description: Enter ami-id
+    Type: String
+    Default: ami-09ed1fd8c4c00daca
+    #RHEL-8.4.0_HVM-20210825-x86_64-0-Hourly2-GP2
+  EC2Name: 
+    Type: String
+    Default: test-ec2
+  KeyName: 
+    Type: AWS::EC2::KeyPair::KeyName
+  VPCId: 
+    Type: AWS::EC2::VPC::Id
+  SubnetId: 
+    Type: AWS::EC2::Subnet::Id  
+  SecurityGroupId: 
+    Type: AWS::EC2::SecurityGroup::Id  
+
+Resources:
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: "${PJPrefix}-${Env}-${RoleName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        # - "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+  EC2RoleInstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      InstanceProfileName:
+        Fn::Sub: "${PJPrefix}-${Env}-${RoleName}"
+      Path: "/"
+      Roles:
+        - Ref: EC2Role
+  EC2Instance1:
+    Type: AWS::EC2::Instance
+    Properties:
+      # DisableApiTermination: true
+      KeyName:
+        Ref: KeyName
+      ImageId:
+        Ref: AMIID
+      InstanceType:
+        Ref: InstanceType
+      SecurityGroupIds:
+        - !Ref SecurityGroupId
+      SubnetId:
+        Ref: SubnetId
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sda1"
+          Ebs:
+            VolumeSize: !Ref StorageRoot
+            VolumeType: gp3
+      IamInstanceProfile: 
+        Ref: EC2Role
+      EbsOptimized: true
+      UserData: 
+        Fn::Base64: |
+          #!/bin/bash
+          REGION_NAME=$(curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone | sed -e 's/.$//')
+          dnf install -y "https://s3.${REGION_NAME}.amazonaws.com/amazon-ssm-${REGION_NAME}/latest/linux_amd64/amazon-ssm-agent.rpm"
+          systemctl enable amazon-ssm-agent
+          systemctl start amazon-ssm-agent
+      Tags:
+        - Key: Name
+          Value: !Sub ${PJPrefix}-${Env}-${EC2Name}
+
+Outputs:
+  EC2RoleInstanceProfile:
+    Value:
+      Ref: EC2RoleInstanceProfile
+    Export:
+      Name: !Sub "${PJPrefix}-${Env}-${RoleName}"
+  EC2Instance1:
+    Value:
+      Ref: EC2Instance1
+    Description: EC2Instance1
+    Export:
+      Name: !Sub ${PJPrefix}-${Env}-${EC2Name}-ec2
